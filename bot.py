@@ -10,6 +10,7 @@ import logging
 import random
 import re
 
+# Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -40,9 +41,7 @@ class Database:
                 log_channel INTEGER,
                 applications_channel_id INTEGER,
                 reviews_channel_id INTEGER,
-                mod_role_id INTEGER,
-                admin_role_id INTEGER,
-                owner_role_id INTEGER
+                staff_role_id INTEGER
             )
         ''')
         
@@ -190,69 +189,18 @@ class Database:
 
 db = Database()
 
-# Permission checker functions
-def has_mod_permission(interaction: discord.Interaction) -> bool:
-    """Check if user has mod permissions"""
-    mod_role_id = db.get_setting(interaction.guild_id, 'mod_role_id')
-    admin_role_id = db.get_setting(interaction.guild_id, 'admin_role_id')
-    owner_role_id = db.get_setting(interaction.guild_id, 'owner_role_id')
+# Permission checker function - just one staff role
+def has_staff_permission(interaction: discord.Interaction) -> bool:
+    """Check if user has staff role or admin permissions"""
+    staff_role_id = db.get_setting(interaction.guild_id, '1496811052447301652')
     
-    user_roles = [role.id for role in interaction.user.roles]
+    # Check for staff role
+    if staff_role_id:
+        user_role_ids = [role.id for role in interaction.user.roles]
+        if staff_role_id in user_role_ids:
+            return True
     
-    # Check for owner role
-    if owner_role_id and owner_role_id in user_roles:
-        return True
-    
-    # Check for admin role
-    if admin_role_id and admin_role_id in user_roles:
-        return True
-    
-    # Check for mod role
-    if mod_role_id and mod_role_id in user_roles:
-        return True
-    
-    # Check for administrator permission (fallback)
-    if interaction.user.guild_permissions.administrator:
-        return True
-    
-    return False
-
-def has_admin_permission(interaction: discord.Interaction) -> bool:
-    """Check if user has admin permissions"""
-    admin_role_id = db.get_setting(interaction.guild_id, 'admin_role_id')
-    owner_role_id = db.get_setting(interaction.guild_id, 'owner_role_id')
-    
-    user_roles = [role.id for role in interaction.user.roles]
-    
-    # Check for owner role
-    if owner_role_id and owner_role_id in user_roles:
-        return True
-    
-    # Check for admin role
-    if admin_role_id and admin_role_id in user_roles:
-        return True
-    
-    # Check for administrator permission (fallback)
-    if interaction.user.guild_permissions.administrator:
-        return True
-    
-    return False
-
-def has_owner_permission(interaction: discord.Interaction) -> bool:
-    """Check if user has owner permissions"""
-    owner_role_id = db.get_setting(interaction.guild_id, 'owner_role_id')
-    
-    user_roles = [role.id for role in interaction.user.roles]
-    
-    # Check for owner role
-    if owner_role_id and owner_role_id in user_roles:
-        return True
-    
-    # Check for server owner
-    if interaction.user.id == interaction.guild.owner_id:
-        return True
-    
-    # Check for administrator permission (fallback)
+    # Check for administrator permission (fallback for server admins)
     if interaction.user.guild_permissions.administrator:
         return True
     
@@ -337,7 +285,8 @@ class PartnershipModal(discord.ui.Modal, title="🤝 Partnership Application"):
                 review_embed.set_footer(text=f"Application ID: {app_id}")
                 
                 view = ReviewView(app_id, interaction.user.id, self.server_name.value)
-                await review_channel.send(content=f"<@&{db.get_setting(interaction.guild_id, 'partner_role')}>" if db.get_setting(interaction.guild_id, 'partner_role') else "", embed=review_embed, view=view)
+                staff_role_id = db.get_setting(interaction.guild_id, 'staff_role_id')
+                await review_channel.send(content=f"<@&{staff_role_id}>" if staff_role_id else "@here", embed=review_embed, view=view)
         
         # Log to log channel
         log_channel_id = db.get_setting(interaction.guild_id, 'log_channel')
@@ -362,9 +311,9 @@ class ReviewView(discord.ui.View):
     
     @discord.ui.button(label="Approve", style=discord.ButtonStyle.success, emoji="✅")
     async def approve_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Check if user has permission (mod, admin, or owner)
-        if not has_mod_permission(interaction):
-            await interaction.response.send_message("❌ You need Mod, Admin, or Owner role to review applications!", ephemeral=True)
+        # Check if user has staff permission
+        if not has_staff_permission(interaction):
+            await interaction.response.send_message("❌ You need the Staff role to review applications!", ephemeral=True)
             return
         
         # Add review
@@ -435,9 +384,9 @@ class ReviewView(discord.ui.View):
     
     @discord.ui.button(label="Deny", style=discord.ButtonStyle.danger, emoji="❌")
     async def deny_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Check permission (mod, admin, or owner)
-        if not has_mod_permission(interaction):
-            await interaction.response.send_message("❌ You need Mod, Admin, or Owner role to review applications!", ephemeral=True)
+        # Check permission for staff role
+        if not has_staff_permission(interaction):
+            await interaction.response.send_message("❌ You need the Staff role to review applications!", ephemeral=True)
             return
         
         # Add review
@@ -524,6 +473,36 @@ class SetupView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=300)
     
+    @discord.ui.button(label="Set Staff Role", style=discord.ButtonStyle.primary, emoji="🛡️")
+    async def set_staff_role(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("Please mention the Staff role (e.g., @Staff) or enter the role ID:", ephemeral=True)
+        
+        def check(m):
+            return m.author == interaction.user and m.channel == interaction.channel
+        
+        try:
+            msg = await bot.wait_for('message', timeout=60, check=check)
+            role_input = msg.content.strip()
+            
+            role = None
+            if role_input.isdigit():
+                role = interaction.guild.get_role(int(role_input))
+            else:
+                # Extract role mention
+                role_id = re.findall(r'<@&(\d+)>', role_input)
+                if role_id:
+                    role = interaction.guild.get_role(int(role_id[0]))
+                else:
+                    role = discord.utils.get(interaction.guild.roles, name=role_input)
+            
+            if role:
+                db.set_setting(interaction.guild_id, staff_role_id=role.id)
+                await interaction.followup.send(f"✅ Staff role set to {role.mention}\nUsers with this role can review applications!", ephemeral=True)
+            else:
+                await interaction.followup.send("❌ Role not found! Please mention a valid role.", ephemeral=True)
+        except asyncio.TimeoutError:
+            await interaction.followup.send("❌ Setup timed out!", ephemeral=True)
+    
     @discord.ui.button(label="Set Application Channel", style=discord.ButtonStyle.primary, emoji="📝")
     async def set_app_channel(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message("Please type the channel name or ID where applications should be sent:", ephemeral=True)
@@ -592,20 +571,24 @@ class SetupView(discord.ui.View):
     
     @discord.ui.button(label="Set Partner Role", style=discord.ButtonStyle.primary, emoji="🎭")
     async def set_partner_role(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("Please mention the role for partners:", ephemeral=True)
+        await interaction.response.send_message("Please mention the role for partners (gets auto-assigned):", ephemeral=True)
         
         def check(m):
             return m.author == interaction.user and m.channel == interaction.channel
         
         try:
             msg = await bot.wait_for('message', timeout=60, check=check)
-            role_name = msg.content.strip()
+            role_input = msg.content.strip()
             
             role = None
-            if role_name.isdigit():
-                role = interaction.guild.get_role(int(role_name))
+            if role_input.isdigit():
+                role = interaction.guild.get_role(int(role_input))
             else:
-                role = discord.utils.get(interaction.guild.roles, name=role_name.strip('<@&>'))
+                role_id = re.findall(r'<@&(\d+)>', role_input)
+                if role_id:
+                    role = interaction.guild.get_role(int(role_id[0]))
+                else:
+                    role = discord.utils.get(interaction.guild.roles, name=role_input)
             
             if role:
                 db.set_setting(interaction.guild_id, partner_role=role.id)
@@ -615,9 +598,9 @@ class SetupView(discord.ui.View):
         except asyncio.TimeoutError:
             await interaction.followup.send("❌ Setup timed out!", ephemeral=True)
     
-    @discord.ui.button(label="Set Log Channel", style=discord.ButtonStyle.primary, emoji="📊")
+    @discord.ui.button(label="Set Log Channel", style=discord.ButtonStyle.secondary, emoji="📊")
     async def set_log_channel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("Please type the channel name or ID for logs:", ephemeral=True)
+        await interaction.response.send_message("Please type the channel name or ID for logs (optional):", ephemeral=True)
         
         def check(m):
             return m.author == interaction.user and m.channel == interaction.channel
@@ -637,81 +620,6 @@ class SetupView(discord.ui.View):
                 await interaction.followup.send(f"✅ Log channel set to {channel.mention}", ephemeral=True)
             else:
                 await interaction.followup.send("❌ Channel not found!", ephemeral=True)
-        except asyncio.TimeoutError:
-            await interaction.followup.send("❌ Setup timed out!", ephemeral=True)
-    
-    @discord.ui.button(label="Set Mod Role", style=discord.ButtonStyle.secondary, emoji="🛡️")
-    async def set_mod_role(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("Please mention the Mod role:", ephemeral=True)
-        
-        def check(m):
-            return m.author == interaction.user and m.channel == interaction.channel
-        
-        try:
-            msg = await bot.wait_for('message', timeout=60, check=check)
-            role_name = msg.content.strip()
-            
-            role = None
-            if role_name.isdigit():
-                role = interaction.guild.get_role(int(role_name))
-            else:
-                role = discord.utils.get(interaction.guild.roles, name=role_name.strip('<@&>'))
-            
-            if role:
-                db.set_setting(interaction.guild_id, mod_role_id=role.id)
-                await interaction.followup.send(f"✅ Mod role set to {role.mention}", ephemeral=True)
-            else:
-                await interaction.followup.send("❌ Role not found!", ephemeral=True)
-        except asyncio.TimeoutError:
-            await interaction.followup.send("❌ Setup timed out!", ephemeral=True)
-    
-    @discord.ui.button(label="Set Admin Role", style=discord.ButtonStyle.secondary, emoji="👑")
-    async def set_admin_role(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("Please mention the Admin role:", ephemeral=True)
-        
-        def check(m):
-            return m.author == interaction.user and m.channel == interaction.channel
-        
-        try:
-            msg = await bot.wait_for('message', timeout=60, check=check)
-            role_name = msg.content.strip()
-            
-            role = None
-            if role_name.isdigit():
-                role = interaction.guild.get_role(int(role_name))
-            else:
-                role = discord.utils.get(interaction.guild.roles, name=role_name.strip('<@&>'))
-            
-            if role:
-                db.set_setting(interaction.guild_id, admin_role_id=role.id)
-                await interaction.followup.send(f"✅ Admin role set to {role.mention}", ephemeral=True)
-            else:
-                await interaction.followup.send("❌ Role not found!", ephemeral=True)
-        except asyncio.TimeoutError:
-            await interaction.followup.send("❌ Setup timed out!", ephemeral=True)
-    
-    @discord.ui.button(label="Set Owner Role", style=discord.ButtonStyle.secondary, emoji="⭐")
-    async def set_owner_role(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("Please mention the Owner role:", ephemeral=True)
-        
-        def check(m):
-            return m.author == interaction.user and m.channel == interaction.channel
-        
-        try:
-            msg = await bot.wait_for('message', timeout=60, check=check)
-            role_name = msg.content.strip()
-            
-            role = None
-            if role_name.isdigit():
-                role = interaction.guild.get_role(int(role_name))
-            else:
-                role = discord.utils.get(interaction.guild.roles, name=role_name.strip('<@&>'))
-            
-            if role:
-                db.set_setting(interaction.guild_id, owner_role_id=role.id)
-                await interaction.followup.send(f"✅ Owner role set to {role.mention}", ephemeral=True)
-            else:
-                await interaction.followup.send("❌ Role not found!", ephemeral=True)
         except asyncio.TimeoutError:
             await interaction.followup.send("❌ Setup timed out!", ephemeral=True)
 
@@ -750,9 +658,9 @@ async def list_partners(interaction: discord.Interaction):
 
 @bot.tree.command(name="applications", description="View pending applications (Staff only)")
 async def view_applications(interaction: discord.Interaction):
-    # Check permissions using role system
-    if not has_mod_permission(interaction):
-        await interaction.response.send_message("❌ You need Mod, Admin, or Owner role to view applications!", ephemeral=True)
+    # Check for staff permission
+    if not has_staff_permission(interaction):
+        await interaction.response.send_message("❌ You need the Staff role to view applications!", ephemeral=True)
         return
     
     apps = db.get_pending_apps(interaction.guild_id)
@@ -778,9 +686,9 @@ async def view_applications(interaction: discord.Interaction):
 
 @bot.tree.command(name="approve", description="Approve a partnership application")
 async def approve_app(interaction: discord.Interaction, application_id: int):
-    # Check permissions using role system
-    if not has_mod_permission(interaction):
-        await interaction.response.send_message("❌ You need Mod, Admin, or Owner role to approve applications!", ephemeral=True)
+    # Check for staff permission
+    if not has_staff_permission(interaction):
+        await interaction.response.send_message("❌ You need the Staff role to approve applications!", ephemeral=True)
         return
     
     apps = db.get_pending_apps(interaction.guild_id)
@@ -825,9 +733,9 @@ async def approve_app(interaction: discord.Interaction, application_id: int):
 
 @bot.tree.command(name="deny", description="Deny a partnership application")
 async def deny_app(interaction: discord.Interaction, application_id: int, reason: str = None):
-    # Check permissions using role system
-    if not has_mod_permission(interaction):
-        await interaction.response.send_message("❌ You need Mod, Admin, or Owner role to deny applications!", ephemeral=True)
+    # Check for staff permission
+    if not has_staff_permission(interaction):
+        await interaction.response.send_message("❌ You need the Staff role to deny applications!", ephemeral=True)
         return
     
     apps = db.get_pending_apps(interaction.guild_id)
@@ -860,11 +768,11 @@ async def deny_app(interaction: discord.Interaction, application_id: int, reason
     except:
         pass
 
-@bot.tree.command(name="removepartner", description="Remove a partner")
+@bot.tree.command(name="removepartner", description="Remove a partner (Admin only)")
 async def remove_partner(interaction: discord.Interaction, server_name: str):
-    # Check for admin or owner permission
-    if not has_admin_permission(interaction):
-        await interaction.response.send_message("❌ You need Admin or Owner role to remove partners!", ephemeral=True)
+    # Check for admin permission (higher level than staff)
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Only Administrators can remove partners!", ephemeral=True)
         return
     
     db.remove_partner(interaction.guild_id, server_name)
@@ -885,11 +793,11 @@ async def partner_stats(interaction: discord.Interaction):
     
     await interaction.response.send_message(embed=embed)
 
-@bot.tree.command(name="refresh", description="Refresh partnership application button")
+@bot.tree.command(name="refresh", description="Refresh partnership application button (Admin only)")
 async def refresh_button(interaction: discord.Interaction):
-    # Check for admin or owner permission
-    if not has_admin_permission(interaction):
-        await interaction.response.send_message("❌ You need Admin or Owner role to refresh the button!", ephemeral=True)
+    # Check for admin permission
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Only Administrators can refresh the button!", ephemeral=True)
         return
     
     partnership_msg = db.get_partnership_message(interaction.guild_id)
@@ -941,60 +849,50 @@ async def help_command(interaction: discord.Interaction):
     )
     
     embed.add_field(
-        name="🔧 Staff Commands (Mod+ Roles)",
+        name="🔧 Staff Commands (Staff Role)",
         value="`/applications` - View pending apps\n`/approve <id>` - Approve application\n`/deny <id> [reason]` - Deny application",
         inline=False
     )
     
     embed.add_field(
-        name="⚙️ Admin Commands (Admin+ Roles)",
+        name="⚙️ Admin Commands (Admin Only)",
         value="`/removepartner <name>` - Remove partner\n`/refresh` - Refresh application button\n`/setup` - Configure system",
         inline=False
     )
     
-    embed.add_field(
-        name="👑 Role Hierarchy",
-        value="**Owner Role** > **Admin Role** > **Mod Role** > **Partner Role**\nSetup `/setup` to configure these roles!",
-        inline=False
-    )
+    staff_role_id = db.get_setting(interaction.guild_id, 'staff_role_id')
+    if staff_role_id:
+        staff_role = interaction.guild.get_role(staff_role_id)
+        if staff_role:
+            embed.add_field(
+                name="👥 Staff Role",
+                value=f"Currently set to: {staff_role.mention}\nUse `/setup` to change it",
+                inline=False
+            )
     
     await interaction.response.send_message(embed=embed)
 
 @bot.tree.command(name="checkperms", description="Check your permission level")
 async def check_perms(interaction: discord.Interaction):
     """Check what permissions you have"""
-    is_mod = has_mod_permission(interaction)
-    is_admin = has_admin_permission(interaction)
-    is_owner = has_owner_permission(interaction)
+    is_staff = has_staff_permission(interaction)
+    is_admin = interaction.user.guild_permissions.administrator
     
     embed = discord.Embed(
         title="🔑 Your Permissions",
         color=discord.Color.blue()
     )
     
-    embed.add_field(name="Mod Permissions", value="✅ Yes" if is_mod else "❌ No", inline=True)
+    embed.add_field(name="Staff Permissions", value="✅ Yes" if is_staff else "❌ No", inline=True)
     embed.add_field(name="Admin Permissions", value="✅ Yes" if is_admin else "❌ No", inline=True)
-    embed.add_field(name="Owner Permissions", value="✅ Yes" if is_owner else "❌ No", inline=True)
     
-    # Show configured roles
-    mod_role_id = db.get_setting(interaction.guild_id, 'mod_role_id')
-    admin_role_id = db.get_setting(interaction.guild_id, 'admin_role_id')
-    owner_role_id = db.get_setting(interaction.guild_id, 'owner_role_id')
-    
-    if mod_role_id or admin_role_id or owner_role_id:
-        embed.add_field(name="\u200b", value="**Configured Roles:**", inline=False)
-        if mod_role_id:
-            mod_role = interaction.guild.get_role(mod_role_id)
-            if mod_role:
-                embed.add_field(name="Mod Role", value=mod_role.mention, inline=True)
-        if admin_role_id:
-            admin_role = interaction.guild.get_role(admin_role_id)
-            if admin_role:
-                embed.add_field(name="Admin Role", value=admin_role.mention, inline=True)
-        if owner_role_id:
-            owner_role = interaction.guild.get_role(owner_role_id)
-            if owner_role:
-                embed.add_field(name="Owner Role", value=owner_role.mention, inline=True)
+    # Show configured staff role
+    staff_role_id = db.get_setting(interaction.guild_id, 'staff_role_id')
+    if staff_role_id:
+        staff_role = interaction.guild.get_role(staff_role_id)
+        if staff_role:
+            embed.add_field(name="Staff Role", value=staff_role.mention, inline=False)
+            embed.add_field(name="Required Role", value=f"You need {staff_role.mention} to review applications", inline=False)
     
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -1003,7 +901,7 @@ async def on_member_join(member):
     # Auto-assign partner role if they're a partner
     partners = db.get_partners(member.guild.id)
     for partner in partners:
-        if partner[2] == member.id:  # partner_guild_id is actually user ID in this case
+        if partner[2] == member.id:
             partner_role_id = db.get_setting(member.guild.id, 'partner_role')
             if partner_role_id:
                 role = member.guild.get_role(partner_role_id)
