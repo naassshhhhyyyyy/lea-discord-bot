@@ -1,0 +1,11 @@
+version: '3.8'
+
+services:
+  partnership-bot:
+    build: .
+    container_name: partnership-bot
+    environment:
+      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
+    volumes:
+      - ./partnerships.db:/app/partnerships.db
+    restart: unless-stopped
