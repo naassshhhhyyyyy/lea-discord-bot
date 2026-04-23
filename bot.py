@@ -10,7 +10,6 @@ import logging
 import random
 import re
 
-# Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
